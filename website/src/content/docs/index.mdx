@@ -1,27 +1,29 @@
 ---
 title: Harbor
 description: A cross-platform, language-agnostic application hosting platform.
-template: splash
-hero:
-  tagline: One daemon, one CLI, one config format for hosting Python, Node.js, .NET, Java, and Rust apps — instead of hand-wiring IIS+ARR+NSSM or nginx+systemd per machine.
-  actions:
-    - text: Get Started
-      link: /harbor/getting-started/
-      icon: right-arrow
-      variant: primary
-    - text: View on GitHub
-      link: https://github.com/ashinberish/harbor
-      icon: external
-      variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-<CardGrid stagger>
+Harbor is a cross-platform, language-agnostic application hosting platform.
+It replaces the combination of IIS + ARR + NSSM (or nginx + systemd/PM2 on
+Linux) with a single daemon, CLI, and — eventually — GUI: point it at a
+Python, Node.js, .NET, Java, or Rust project and it handles process
+supervision, restart policy, and log capture through one consistent
+command surface, on Windows, macOS, or Linux alike.
+
+This site documents the **Phase 1** daemon + CLI process-supervision MVP.
+Reverse proxy, automatic SSL, native OS service install, and the GUI are
+later phases — see [Roadmap & Status](/harbor/roadmap/) for exactly what's
+implemented today versus what's planned.
+
+## What Harbor does today
+
+<CardGrid>
 	<Card title="Process supervision" icon="rocket">
-		Point Harbor at a project directory. It auto-detects the runtime, launches
-		it, captures logs, and restarts it per a configurable policy — start,
-		stop, restart, and status from one CLI.
+		Point Harbor at a project directory. It auto-detects the runtime,
+		launches it, captures logs, and restarts it per a configurable policy —
+		start, stop, restart, and status from one CLI.
 	</Card>
 	<Card title="Cross-platform" icon="laptop">
 		The same daemon, CLI, and TOML config format on Windows, macOS, and
@@ -33,13 +35,28 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 	</Card>
 	<Card title="Auto-recovery" icon="setting">
 		Apps come back after a daemon restart — and a live orphan left behind by
-		an unclean shutdown is detected and reaped before its replacement spawns.
+		an unclean shutdown is detected and reaped before its replacement
+		spawns.
 	</Card>
 </CardGrid>
 
-## Where this project is
+## Start here
 
-This site documents the **Phase 1** daemon + CLI process-supervision MVP.
-Reverse proxy, automatic SSL, native OS service install, and the GUI are
-later phases — see [Roadmap & Status](/harbor/roadmap/) for exactly what's
-implemented today versus what's planned.
+<CardGrid>
+	<Card title="Getting Started" icon="open-book">
+		Build the workspace, start the daemon, and run your first app.
+		[Read the guide](/harbor/getting-started/).
+	</Card>
+	<Card title="CLI Reference" icon="list-format">
+		Every `harbor` subcommand and flag.
+		[View reference](/harbor/cli-reference/).
+	</Card>
+	<Card title="Configuration" icon="document">
+		The TOML schema behind each app, and where Harbor's files live.
+		[View reference](/harbor/configuration/).
+	</Card>
+	<Card title="Architecture" icon="puzzle">
+		How the daemon supervises processes and recovers from crashes.
+		[Read the guide](/harbor/architecture/).
+	</Card>
+</CardGrid>
