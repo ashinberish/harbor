@@ -37,7 +37,10 @@ non-privileged ports by default so no elevated permissions are needed; see
 [Configuration](/harbor/configuration/) to point them at 80/443 instead.
 
 Leave the daemon running in this terminal; everything below uses a second
-terminal to talk to it through the CLI.
+terminal to talk to it through the CLI. For a real deployment, run
+`harbor service install` instead of a foreground `cargo run` — it
+registers `harbord` with your OS's service manager so it starts at boot
+(see the [CLI Reference](/harbor/cli-reference/#harbor-service)).
 
 ## Add and run your first app
 

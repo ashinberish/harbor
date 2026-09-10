@@ -8,9 +8,9 @@ together IIS+ARR+NSSM (Windows) or nginx+systemd (Linux/macOS) by hand. See
 docs site at **https://ashinberish.github.io/harbor/** for guides and
 reference.
 
-This repository currently implements **Phase 1 and Phase 2** of the PRD:
-process supervision plus a reverse proxy with TLS/ACME and config
-hot-reload. Native OS service registration and the GUI are later phases and
+This repository currently implements **Phases 1–3** of the PRD: process
+supervision, a reverse proxy with TLS/ACME and config hot-reload, and
+native OS service registration. The GUI is the remaining later phase and
 not yet implemented (see [Status](#status) below).
 
 ## Workspace layout
@@ -19,10 +19,13 @@ not yet implemented (see [Status](#status) below).
   auto-detection, HTTP API request/response DTOs.
 - `crates/harbor-daemon` (`harbord` binary) — process supervisor, reverse
   proxy (HTTP/HTTPS with WebSocket passthrough), TLS certificate management
-  (self-signed + ACME), and the localhost management API (Axum).
+  (self-signed + ACME), and the localhost management API (Axum). Runs as a
+  plain foreground process, or as a native OS service (Windows Service via
+  the `windows-service` crate; systemd/launchd manage it directly).
 - `crates/harbor-cli` (`harbor` binary) — CLI that talks to the daemon over
   HTTP: `add`, `start`, `stop`, `restart`, `status`, `logs`, `remove`,
-  `apply`.
+  `apply`, plus `service install|uninstall|start|stop|status` for OS
+  service registration.
 
 ## Building
 
@@ -35,7 +38,8 @@ cargo test --workspace
 
 ## Running
 
-Start the daemon (foreground; install as a native service is Phase 3):
+Start the daemon in the foreground (for OS service installation, see
+[Running as a service](#running-as-a-service) below):
 
 ```sh
 cargo run -p harbor-daemon
@@ -80,9 +84,29 @@ to hand-edit or version-control (FR13, FR15). The daemon watches that
 directory and picks up changes automatically (FR14); run `harbor apply` for
 an explicit, synchronous reload instead of waiting on the watch.
 
+## Running as a service
+
+`harbor service install` registers `harbord` with the OS's native service
+manager so it starts at boot without a terminal left open (FR7):
+
+```sh
+# Linux (systemd) — system-wide by default, needs root; --user for a
+# per-user service instead
+sudo harbor service install
+# macOS (launchd) — same system/--user split
+sudo harbor service install
+# Windows (Services / SCM) — run from an elevated (Administrator) prompt
+harbor service install
+```
+
+It finds the `harbord` binary automatically (next to the `harbor` binary
+running the command), starts the service immediately, and `harbor service
+status`/`stop`/`start`/`uninstall` manage it afterward. See the docs site's
+Architecture page for how each platform's backend works.
+
 ## Status
 
-Implemented (Phase 1 + Phase 2):
+Implemented (Phases 1–3):
 
 - Runtime auto-detection for Python/Node/.NET/Java/Rust project markers,
   with manual override via `--runtime`/`--command` (FR1, FR2).
@@ -93,14 +117,21 @@ Implemented (Phase 1 + Phase 2):
 - Per-app environment variables and working directory (FR5).
 - stdout/stderr log capture to per-app files with a tail/follow CLI view;
   no rotation yet (FR6, partial).
+- Native OS service registration: `harbor service install` — a systemd
+  unit on Linux, a launchd job on macOS, a real Windows Service (via the
+  `windows-service` crate, not just an unmanaged wrapped process) on
+  Windows (FR7).
 - Declarative per-app TOML config plus a global daemon config (FR13, FR15).
-- `harbor add|start|stop|restart|status|logs|remove|apply` CLI (FR16–FR20).
+- `harbor add|start|stop|restart|status|logs|remove|apply|service` CLI
+  (FR16–FR20).
 - Management API bound to `127.0.0.1` by default, bearer-token auth on all
   routes except `/health` (FR25, FR26).
 - Auto-recovery: previously-running apps are restarted when the daemon
   restarts, and a live orphan process left behind by an unclean daemon exit
   is detected and reaped before its replacement is spawned, so recovery
-  doesn't leave two copies of an app running (NFR3, G6).
+  doesn't leave two copies of an app running (NFR3, G6). The daemon itself
+  also shuts down cleanly on SIGTERM/Ctrl+C (or an SCM stop on Windows)
+  rather than being killed outright, so this cleanup actually runs.
 - Reverse proxy routing by domain (`Host` header, SNI) and/or URL path
   prefix to an app's local port, with WebSocket passthrough (FR8, FR11).
 - HTTPS via `rustls`: a self-signed certificate per domain by default, and
@@ -111,9 +142,22 @@ Implemented (Phase 1 + Phase 2):
 - Config hot-reload: the daemon watches `apps_dir` and applies changes
   automatically, plus an explicit `harbor apply` (FR14).
 
-Not yet implemented (later phases per the PRD):
+Not yet implemented (later phase per the PRD):
 
-- Native OS service registration for the daemon itself — Windows Service,
-  systemd, launchd (FR7, Phase 3).
 - GUI (FR21–FR24, Phase 4).
 - Log rotation, CPU/memory metrics, multi-user auth hardening (Phase 5).
+
+**A note on cross-platform verification**: this project was built and
+tested on Linux. The systemd backend was verified as far as this sandbox
+allows (unit-file generation and graceful error handling are exercised for
+real; there's no running systemd instance to actually register with). The
+Windows backend (daemon SCM integration and the CLI's service registration)
+was cross-compiled, linked, and clippy-checked against a real
+`x86_64-pc-windows-gnu` target — genuine `.exe` output — but never run on
+actual Windows. The launchd backend was checked for correctness in
+isolation against `x86_64-apple-darwin` (it only uses `std`, no
+platform-specific crates), but the full CLI can't be cross-compiled for
+macOS here because an unrelated dependency needs a real macOS SDK. None of
+the three service backends have been exercised against a real systemd,
+launchd, or Windows SCM instance — treat them as implemented-and-checked,
+not field-tested.

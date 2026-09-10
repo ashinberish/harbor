@@ -1,4 +1,5 @@
 mod client;
+mod service;
 
 use std::path::PathBuf;
 
@@ -57,6 +58,48 @@ enum Command {
     /// daemon watches `apps_dir` and picks up changes automatically — but
     /// useful to confirm a change landed, or if the watch isn't running.
     Apply,
+    /// Install, remove, or control harbord as a native OS service (FR7) —
+    /// a systemd unit on Linux, a launchd job on macOS, or a Windows
+    /// Service — so it starts at boot without a terminal left open.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceAction {
+    /// Register harbord with the OS service manager and start it.
+    Install {
+        /// Install as a per-user service instead of system-wide. Not
+        /// meaningful on Windows, where services are always system-level.
+        #[arg(long)]
+        user: bool,
+        /// Path to the harbord binary. Defaults to a binary named
+        /// `harbord` next to this `harbor` executable.
+        #[arg(long)]
+        binary: Option<PathBuf>,
+    },
+    /// Stop harbord and remove it from the OS service manager.
+    Uninstall {
+        #[arg(long)]
+        user: bool,
+    },
+    /// Start the installed service.
+    Start {
+        #[arg(long)]
+        user: bool,
+    },
+    /// Stop the installed service.
+    Stop {
+        #[arg(long)]
+        user: bool,
+    },
+    /// Show the OS service manager's status for harbord.
+    Status {
+        #[arg(long)]
+        user: bool,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -86,6 +129,21 @@ async fn main() {
 
 async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // `harbor service ...` manages the daemon's OS-level registration —
+    // it must work before the daemon has ever run (no token yet) and
+    // doesn't talk to its HTTP API at all, so handle it before the
+    // management-API client setup below, which assumes the daemon exists.
+    if let Command::Service { action } = cli.command {
+        return match action {
+            ServiceAction::Install { user, binary } => service::install(user, binary),
+            ServiceAction::Uninstall { user } => service::uninstall(user),
+            ServiceAction::Start { user } => service::start(user),
+            ServiceAction::Stop { user } => service::stop(user),
+            ServiceAction::Status { user } => service::status(user),
+        };
+    }
+
     let paths = HarborPaths::discover();
     let global = GlobalConfig::load_or_default(&paths.global_config_file)?;
     let token = std::fs::read_to_string(&paths.token_file)
@@ -174,6 +232,7 @@ async fn run() -> anyhow::Result<()> {
             let result = client.apply().await?;
             println!("reloaded {} app config(s)", result.apps_loaded);
         }
+        Command::Service { .. } => unreachable!("handled before daemon client setup above"),
     }
     Ok(())
 }

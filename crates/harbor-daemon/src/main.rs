@@ -7,7 +7,10 @@ mod supervisor;
 mod tls;
 mod token;
 mod watch;
+#[cfg(windows)]
+mod winservice;
 
+use std::future::Future;
 use std::sync::Arc;
 
 use harbor_core::{GlobalConfig, HarborPaths};
@@ -15,12 +18,62 @@ use tracing::info;
 
 use supervisor::Supervisor;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("harbord=info".parse()?))
         .init();
 
+    // On Windows, `harbor service install` registers this binary with the
+    // Service Control Manager passing `--windows-service`; the SCM starts
+    // the process with that flag and expects it to immediately hand
+    // control to the service dispatcher rather than run normally. Every
+    // other invocation — direct, or under systemd/launchd, which manage
+    // arbitrary processes without a comparable startup protocol — just
+    // runs the daemon in the foreground.
+    #[cfg(windows)]
+    if std::env::args().any(|a| a == "--windows-service") {
+        return winservice::run();
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(run_daemon(shutdown_signal()))
+}
+
+/// Resolves on Ctrl+C, or on SIGTERM on Unix — the signal `systemctl
+/// stop`/`launchctl stop` send. Letting the daemon catch this and return
+/// from `main()` normally (rather than being killed outright by the
+/// default OS disposition) matters because supervised child processes are
+/// only guaranteed to be cleaned up via `kill_on_drop` when Rust's normal
+/// drop glue runs, which an unhandled signal bypasses.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    info!("shutdown signal received");
+}
+
+/// Everything the daemon does, from one invocation to process exit.
+/// Shared between normal foreground startup and the Windows service entry
+/// point (`winservice.rs`), which supplies SCM stop notifications as
+/// `shutdown` instead of OS signals.
+pub async fn run_daemon(shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     let paths = HarborPaths::discover();
     paths.ensure_dirs()?;
     info!("harbor home: {}", paths.home.display());
@@ -128,7 +181,8 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&global.bind_addr).await?;
     info!("harbor daemon listening on {}", global.bind_addr);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+    info!("harbor daemon stopped");
 
     Ok(())
 }

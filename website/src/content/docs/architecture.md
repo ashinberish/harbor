@@ -167,6 +167,73 @@ out-of-band keeps running under its last-loaded config until explicitly
 `harbor remove`d — reload only applies additions and edits, matching
 FR14's "apply config changes," not "detect manual file deletion."
 
+## Graceful shutdown
+
+`harbord`'s entire startup sequence lives in one `run_daemon(shutdown)`
+function taking a future that resolves when it's time to stop — normally
+Ctrl+C or SIGTERM (`main.rs` installs both via `tokio::signal`), or an SCM
+stop notification when running as a Windows service (see below). Catching
+SIGTERM rather than leaving the OS's default disposition (immediate kill)
+matters concretely: supervised child processes are only reliably cleaned
+up via `kill_on_drop` when Rust's normal drop glue runs on the way out of
+`main()`, which an unhandled signal bypasses entirely — you'd see orphaned
+app processes and have to lean on the reaping logic above instead of a
+clean stop.
+
+## Native OS service registration
+
+`harbor service install` (FR7) registers `harbord` with the OS's service
+manager so it starts at boot without a terminal open — replacing the
+NSSM/systemd-unit-by-hand setup the PRD's problem statement describes.
+Each backend lives in `harbor-cli/src/service/`, dispatched by
+`target_os` at compile time:
+
+- **systemd (Linux)** — generates a `.service` unit (`ExecStart` pointing
+  at the located `harbord` binary) and shells out to `systemctl`.
+  `--user` installs to `~/.config/systemd/user/` and uses `systemctl
+  --user` instead of `/etc/systemd/system/` + root; systemd manages an
+  arbitrary process fine either way, no special cooperation from `harbord`
+  needed.
+- **launchd (macOS)** — generates a `.plist` (LaunchDaemon at
+  `/Library/LaunchDaemons/` by default, LaunchAgent at
+  `~/Library/LaunchAgents/` with `--user`) and drives it with the modern
+  `launchctl bootstrap`/`bootout`/`kickstart`/`print` subcommands. Same
+  story as systemd: no cooperation needed from the daemon itself.
+- **Windows Service** — the outlier. Windows' Service Control Manager
+  expects the process to actively participate in its protocol (register a
+  control handler, report `Running`, report `Stopped` before exiting) —
+  a plain console app registered with `sc.exe create` gets killed rather
+  than stopped cleanly. So `harbord` itself has a `#[cfg(windows)]`
+  `winservice` module: `harbor service install` passes `--windows-service`
+  in the registered command line, and `main()` checks for that flag before
+  doing anything else, handing control to `windows_service::service_dispatcher`
+  instead of running `run_daemon` directly in the foreground. The SCM's
+  synchronous stop callback (delivered on its own OS thread, not inside
+  Tokio) is bridged into the async `shutdown` future `run_daemon` expects
+  via a blocking channel receive inside `spawn_blocking`. The CLI side uses
+  the `windows-service` crate's `ServiceManager` to create/delete/start/stop
+  the service.
+
+All three backends locate the `harbord` binary automatically (a binary
+named `harbord`/`harbord.exe` next to the running `harbor` CLI — true for
+both a cargo build and a typical installed layout), overridable with
+`--binary`.
+
+**Verification note.** This was all built and tested on Linux, where the
+container's PID 1 isn't systemd — `systemctl` itself can't run here, so
+the systemd backend was verified as far as that allows: unit-file content
+generation, binary auto-location, and graceful error propagation when
+`systemctl` is unreachable, all confirmed for real, but not an actual
+`systemctl start`. The Windows backend (both `winservice.rs` in the
+daemon and the CLI's `windows.rs`) was cross-compiled, linked, and
+clippy-checked against a real `x86_64-pc-windows-gnu` target — genuine
+`.exe` output — but never run against a real SCM. The launchd backend was
+checked for correctness in isolation against `x86_64-apple-darwin` (it's
+pure `std::process`/`std::fs`, no platform-specific crate), since the full
+CLI can't be cross-compiled for macOS here — an unrelated dependency
+(reqwest's TLS backend) needs a real macOS SDK to cross-compile that this
+sandbox doesn't have.
+
 ## The management API
 
 Axum-based HTTP API, bound to localhost by default (FR25) and requiring a
@@ -190,6 +257,5 @@ is expected to be another client of the same surface (PRD G4).
 
 ## What's not here yet
 
-Native OS service registration for the daemon itself (Phase 3) and the GUI
-(Phase 4) don't exist in this codebase yet — see
+The GUI (Phase 4) doesn't exist in this codebase yet — see
 [Roadmap & Status](/harbor/roadmap/).

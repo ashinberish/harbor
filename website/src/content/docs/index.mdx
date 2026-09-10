@@ -12,9 +12,9 @@ Python, Node.js, .NET, Java, or Rust project and it handles process
 supervision, restart policy, log capture, and reverse-proxied HTTPS through
 one consistent command surface, on Windows, macOS, or Linux alike.
 
-This site documents **Phase 1 and Phase 2**: process supervision plus a
-reverse proxy with TLS/ACME and config hot-reload. Native OS service
-install and the GUI are later phases — see
+This site documents **Phases 1–3**: process supervision, a reverse proxy
+with TLS/ACME and config hot-reload, and native OS service registration.
+The GUI is the remaining later phase — see
 [Roadmap & Status](/harbor/roadmap/) for exactly what's implemented today
 versus what's planned.
 
@@ -47,6 +47,11 @@ versus what's planned.
 	<Card title="Hot-reload" icon="magnifier">
 		The daemon watches your app configs and applies changes automatically —
 		or trigger it explicitly with `harbor apply`.
+	</Card>
+	<Card title="Native OS service" icon="server">
+		`harbor service install` registers the daemon with systemd, launchd, or
+		a real Windows Service, so it starts at boot without a terminal left
+		open.
 	</Card>
 </CardGrid>
 

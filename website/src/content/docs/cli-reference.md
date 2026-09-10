@@ -5,7 +5,9 @@ description: Every harbor subcommand and flag.
 
 The `harbor` CLI talks to the `harbord` daemon over its localhost HTTP API,
 authenticating with the token at `~/.harbor/token` (or `$HARBOR_HOME/token`).
-The daemon must already be running.
+The daemon must already be running — except for `harbor service`, which
+manages the daemon's OS-level registration directly and works before
+`harbord` has ever run.
 
 ## `harbor add`
 
@@ -78,3 +80,27 @@ Reloads app configs from disk immediately and reports how many were
 loaded. The daemon also watches `apps_dir` and applies changes
 automatically (FR14) — `apply` is for confirming a change landed
 synchronously, or as a fallback if the watch isn't running.
+
+## `harbor service`
+
+```sh
+harbor service install [--user] [--binary <path>]
+harbor service uninstall [--user]
+harbor service start [--user]
+harbor service stop [--user]
+harbor service status [--user]
+```
+
+Registers `harbord` with the OS's native service manager so it starts at
+boot without a terminal left open (FR7) — a systemd unit on Linux, a
+launchd job on macOS, a real Windows Service on Windows. `install` finds
+the `harbord` binary automatically (next to the running `harbor` binary),
+writes the unit/plist/service registration, and starts it immediately.
+
+| Flag | Description |
+| --- | --- |
+| `--user` | Install/target a per-user service instead of system-wide. System-wide (the default) needs root/Administrator; on Linux/macOS, `--user` avoids that at the cost of only running while you're logged in unless you also enable lingering (Linux: `loginctl enable-linger $USER`). Not meaningful on Windows, where services are always system-level — ignored there. |
+| `--binary` | (`install` only) Path to the `harbord` binary, if it isn't next to this `harbor` binary. |
+
+`status` prints the OS service manager's own status output directly
+(`systemctl status`, `launchctl print`, or the SCM's current state).

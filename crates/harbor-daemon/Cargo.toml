@@ -32,3 +32,6 @@ rcgen = "0.14.10"
 rustls-pki-types = "1.15.1"
 instant-acme = { version = "0.8.5", features = ["rcgen"] }
 notify = "8.2.0"
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.1"

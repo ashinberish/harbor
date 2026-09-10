@@ -12,8 +12,8 @@ in the repo). This page tracks what's actually built.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Daemon + CLI MVP, process supervision | **Implemented** |
-| 2 | Reverse proxy, ACME/TLS, config hot-reload | **Implemented** (this site documents it) |
-| 3 | Native OS service registration (systemd, launchd, Windows Service) | Not started |
+| 2 | Reverse proxy, ACME/TLS, config hot-reload | **Implemented** |
+| 3 | Native OS service registration (systemd, launchd, Windows Service) | **Implemented** (this site documents it) |
 | 4 | GUI (Tauri dashboard) | Not started |
 | 5 | Auth hardening, metrics/alerting | Not started |
 
@@ -56,10 +56,32 @@ in the repo). This page tracks what's actually built.
 - `harbor add|start|stop|restart|status|logs|remove|apply` CLI
   (FR16–FR20).
 
+## Implemented (Phase 3)
+
+- `harbor service install|uninstall|start|stop|status`, registering
+  `harbord` with the OS's native service manager so it starts at boot
+  without a terminal left open (FR7):
+  - **systemd** (Linux) — generates a unit, drives it with `systemctl`.
+  - **launchd** (macOS) — generates a plist, drives it with `launchctl`.
+  - **Windows Service** — a real SCM-integrated service (the daemon
+    responds to Stop control via the `windows-service` crate), not just
+    an unmanaged process pointed at by `sc.exe create`.
+- Graceful shutdown on SIGTERM/Ctrl+C (and SCM stop, on Windows), so
+  supervised child processes actually get the cleanup pass that depends
+  on Rust's normal drop glue running, instead of the process being killed
+  outright.
+- The systemd backend was verified in this sandbox as far as its own
+  lack of a running systemd instance allows (unit generation, binary
+  auto-location, graceful error handling, all confirmed for real). The
+  Windows backend was cross-compiled, linked, and clippy-checked against
+  a real `x86_64-pc-windows-gnu` target. The launchd backend was checked
+  for correctness in isolation against `x86_64-apple-darwin` (pure
+  `std`, no platform crate) since the full CLI can't be cross-compiled
+  for macOS here. None of the three were exercised against a real
+  systemd, launchd, or Windows SCM instance.
+
 ## Not yet implemented
 
-- Native OS service registration for the daemon itself — Windows Service,
-  systemd, launchd (FR7, Phase 3).
 - GUI (FR21–FR24, Phase 4).
 - Log rotation, CPU/memory metrics, multi-user auth hardening (Phase 5).
 
