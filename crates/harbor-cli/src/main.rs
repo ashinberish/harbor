@@ -1,4 +1,5 @@
 mod client;
+mod service;
 
 use std::path::PathBuf;
 
@@ -30,6 +31,8 @@ enum Command {
         port: Option<u16>,
         #[arg(long)]
         domain: Option<String>,
+        #[arg(long = "path-prefix")]
+        path_prefix: Option<String>,
         #[arg(long, value_enum, default_value = "on-failure")]
         restart: RestartArg,
     },
@@ -51,6 +54,52 @@ enum Command {
     },
     /// Remove an app (stops it first) (FR20).
     Remove { app: String },
+    /// Reload app configs from disk (FR14). Usually unnecessary — the
+    /// daemon watches `apps_dir` and picks up changes automatically — but
+    /// useful to confirm a change landed, or if the watch isn't running.
+    Apply,
+    /// Install, remove, or control harbord as a native OS service (FR7) —
+    /// a systemd unit on Linux, a launchd job on macOS, or a Windows
+    /// Service — so it starts at boot without a terminal left open.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceAction {
+    /// Register harbord with the OS service manager and start it.
+    Install {
+        /// Install as a per-user service instead of system-wide. Not
+        /// meaningful on Windows, where services are always system-level.
+        #[arg(long)]
+        user: bool,
+        /// Path to the harbord binary. Defaults to a binary named
+        /// `harbord` next to this `harbor` executable.
+        #[arg(long)]
+        binary: Option<PathBuf>,
+    },
+    /// Stop harbord and remove it from the OS service manager.
+    Uninstall {
+        #[arg(long)]
+        user: bool,
+    },
+    /// Start the installed service.
+    Start {
+        #[arg(long)]
+        user: bool,
+    },
+    /// Stop the installed service.
+    Stop {
+        #[arg(long)]
+        user: bool,
+    },
+    /// Show the OS service manager's status for harbord.
+    Status {
+        #[arg(long)]
+        user: bool,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -80,6 +129,21 @@ async fn main() {
 
 async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // `harbor service ...` manages the daemon's OS-level registration —
+    // it must work before the daemon has ever run (no token yet) and
+    // doesn't talk to its HTTP API at all, so handle it before the
+    // management-API client setup below, which assumes the daemon exists.
+    if let Command::Service { action } = cli.command {
+        return match action {
+            ServiceAction::Install { user, binary } => service::install(user, binary),
+            ServiceAction::Uninstall { user } => service::uninstall(user),
+            ServiceAction::Start { user } => service::start(user),
+            ServiceAction::Stop { user } => service::stop(user),
+            ServiceAction::Status { user } => service::status(user),
+        };
+    }
+
     let paths = HarborPaths::discover();
     let global = GlobalConfig::load_or_default(&paths.global_config_file)?;
     let token = std::fs::read_to_string(&paths.token_file)
@@ -100,6 +164,7 @@ async fn run() -> anyhow::Result<()> {
             command,
             port,
             domain,
+            path_prefix,
             restart,
         } => {
             let path = std::fs::canonicalize(&path)
@@ -113,6 +178,7 @@ async fn run() -> anyhow::Result<()> {
                 command,
                 port,
                 domain,
+                path_prefix,
                 env: Default::default(),
                 restart_policy: Some(restart.into()),
             };
@@ -162,6 +228,11 @@ async fn run() -> anyhow::Result<()> {
             client.remove_app(&app).await?;
             println!("removed '{app}'");
         }
+        Command::Apply => {
+            let result = client.apply().await?;
+            println!("reloaded {} app config(s)", result.apps_loaded);
+        }
+        Command::Service { .. } => unreachable!("handled before daemon client setup above"),
     }
     Ok(())
 }
@@ -172,8 +243,8 @@ fn print_status(apps: &[harbor_core::AppStatus]) {
         return;
     }
     println!(
-        "{:<20} {:<8} {:<11} {:<8} {:<6} {:<9} {:<20}",
-        "NAME", "RUNTIME", "STATE", "PID", "PORT", "RESTARTS", "DOMAIN"
+        "{:<20} {:<8} {:<11} {:<8} {:<7} {:<9} {:<6} {:<9} {:<20}",
+        "NAME", "RUNTIME", "STATE", "PID", "CPU%", "MEM", "PORT", "RESTARTS", "DOMAIN"
     );
     for app in apps {
         let state_marker = match app.state {
@@ -183,15 +254,32 @@ fn print_status(apps: &[harbor_core::AppStatus]) {
             AppState::Crashed => "crashed",
         };
         println!(
-            "{:<20} {:<8} {:<11} {:<8} {:<6} {:<9} {:<20}",
+            "{:<20} {:<8} {:<11} {:<8} {:<7} {:<9} {:<6} {:<9} {:<20}",
             app.name,
             app.runtime.as_str(),
             state_marker,
             app.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            app.cpu_percent.map(|c| format!("{c:.1}")).unwrap_or_else(|| "-".into()),
+            app.memory_bytes.map(format_bytes).unwrap_or_else(|| "-".into()),
             app.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             app.restart_count,
             app.domain.clone().unwrap_or_else(|| "-".into()),
         );
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{value:.0}{}", UNITS[unit])
+    } else {
+        format!("{value:.1}{}", UNITS[unit])
     }
 }
 

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use harbor_core::{AppConfig, AppState, AppStatus, HarborPaths, RestartPolicy};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -40,6 +41,7 @@ pub struct Supervisor {
     pub paths: HarborPaths,
     configs: Mutex<HashMap<String, AppConfig>>,
     runtime: Mutex<HashMap<String, RuntimeInfo>>,
+    sys: Mutex<System>,
 }
 
 impl Supervisor {
@@ -48,30 +50,24 @@ impl Supervisor {
             paths,
             configs: Mutex::new(HashMap::new()),
             runtime: Mutex::new(HashMap::new()),
+            sys: Mutex::new(System::new_all()),
         }
+    }
+
+    /// Re-sample CPU/memory for every currently-tracked process (FR21).
+    /// CPU usage is a delta since the previous sample, so this is meant to
+    /// be called periodically from a background loop, not once per status
+    /// request — `main.rs` spawns that loop.
+    pub fn refresh_process_stats(&self) {
+        self.sys
+            .lock()
+            .unwrap()
+            .refresh_processes(ProcessesToUpdate::All, true);
     }
 
     /// Load every `<apps_dir>/*.toml` app config from disk into memory.
     pub fn load_configs(&self) -> anyhow::Result<()> {
-        if !self.paths.apps_dir.is_dir() {
-            return Ok(());
-        }
-        let mut configs = self.configs.lock().unwrap();
-        let mut runtime = self.runtime.lock().unwrap();
-        for entry in std::fs::read_dir(&self.paths.apps_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
-                continue;
-            }
-            match AppConfig::load(&path) {
-                Ok(cfg) => {
-                    runtime.entry(cfg.name.clone()).or_default();
-                    configs.insert(cfg.name.clone(), cfg);
-                }
-                Err(e) => warn!("skipping invalid app config {}: {e}", path.display()),
-            }
-        }
+        self.reload_configs()?;
         Ok(())
     }
 
@@ -113,6 +109,30 @@ impl Supervisor {
 
     pub fn exists(&self, name: &str) -> bool {
         self.configs.lock().unwrap().contains_key(name)
+    }
+
+    pub fn get_config(&self, name: &str) -> Option<AppConfig> {
+        self.configs.lock().unwrap().get(name).cloned()
+    }
+
+    /// Replace an existing app's config wholesale (FR24). Takes effect for
+    /// routing immediately (the proxy reads the live config on every
+    /// request); a running process only picks up a changed command/env/
+    /// working_dir on its next start or restart, same as a file-watch
+    /// reload.
+    pub fn update_config(&self, config: AppConfig) -> anyhow::Result<()> {
+        if !self.exists(&config.name) {
+            anyhow::bail!("app '{}' not found", config.name);
+        }
+        if config.command.is_empty() {
+            anyhow::bail!("command must not be empty");
+        }
+        if config.path.as_os_str().is_empty() {
+            anyhow::bail!("path must not be empty");
+        }
+        config.save(&self.paths.app_config_path(&config.name))?;
+        self.configs.lock().unwrap().insert(config.name.clone(), config);
+        Ok(())
     }
 
     pub fn start_app(self: &std::sync::Arc<Self>, name: &str) -> anyhow::Result<()> {
@@ -185,15 +205,17 @@ impl Supervisor {
         let cfg = configs.get(name)?;
         let runtime = self.runtime.lock().unwrap();
         let info = runtime.get(name);
-        Some(build_status(name, cfg, info))
+        let sys = self.sys.lock().unwrap();
+        Some(build_status(name, cfg, info, &sys))
     }
 
     pub fn status_all(&self) -> Vec<AppStatus> {
         let configs = self.configs.lock().unwrap();
         let runtime = self.runtime.lock().unwrap();
+        let sys = self.sys.lock().unwrap();
         let mut out: Vec<AppStatus> = configs
             .iter()
-            .map(|(name, cfg)| build_status(name, cfg, runtime.get(name)))
+            .map(|(name, cfg)| build_status(name, cfg, runtime.get(name), &sys))
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
@@ -207,23 +229,124 @@ impl Supervisor {
         let stderr = tail_file(&self.paths.app_log_path(name, "err"), lines);
         Ok((stdout, stderr))
     }
+
+    /// Re-read every `<apps_dir>/*.toml` from disk, adding newly-created
+    /// apps and updating in-memory config for existing ones (FR14). Apps
+    /// whose file was deleted out-of-band are left running under their
+    /// last-loaded config until explicitly removed — this only picks up
+    /// additions and edits, matching `harbor apply`'s job of applying
+    /// config changes, not detecting manual file deletion.
+    pub fn reload_configs(&self) -> anyhow::Result<usize> {
+        if !self.paths.apps_dir.is_dir() {
+            return Ok(0);
+        }
+        let mut loaded = 0;
+        let mut configs = self.configs.lock().unwrap();
+        let mut runtime = self.runtime.lock().unwrap();
+        for entry in std::fs::read_dir(&self.paths.apps_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            match AppConfig::load(&path) {
+                Ok(cfg) => {
+                    runtime.entry(cfg.name.clone()).or_default();
+                    configs.insert(cfg.name.clone(), cfg);
+                    loaded += 1;
+                }
+                Err(e) => warn!("skipping invalid app config {}: {e}", path.display()),
+            }
+        }
+        Ok(loaded)
+    }
+
+    /// Find the app whose `domain` or `path_prefix` matches an incoming
+    /// proxied request (FR8). An exact `Host` match always wins over a
+    /// path-prefix match; among path-prefix matches, the longest prefix
+    /// wins. Only apps with a `port` configured are reachable this way.
+    pub fn resolve_route(&self, host: Option<&str>, path: &str) -> Option<RouteMatch> {
+        let configs = self.configs.lock().unwrap();
+        let host_norm = host.map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase());
+
+        if let Some(h) = &host_norm {
+            for cfg in configs.values() {
+                let Some(port) = cfg.port else { continue };
+                if cfg.domain.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(h)) {
+                    return Some(RouteMatch {
+                        app_name: cfg.name.clone(),
+                        target_port: port,
+                        strip_prefix: None,
+                    });
+                }
+            }
+        }
+
+        let mut best: Option<(&AppConfig, u16, usize)> = None;
+        for cfg in configs.values() {
+            let (Some(prefix), Some(port)) = (&cfg.path_prefix, cfg.port) else {
+                continue;
+            };
+            if path.starts_with(prefix.as_str()) {
+                let len = prefix.len();
+                if best.map(|(_, _, best_len)| len > best_len).unwrap_or(true) {
+                    best = Some((cfg, port, len));
+                }
+            }
+        }
+        best.map(|(cfg, port, _)| RouteMatch {
+            app_name: cfg.name.clone(),
+            target_port: port,
+            strip_prefix: cfg.path_prefix.clone(),
+        })
+    }
+
+    /// Every distinct domain configured across all apps — used to decide
+    /// which domains need a TLS certificate (self-signed or ACME).
+    pub fn configured_domains(&self) -> Vec<String> {
+        let configs = self.configs.lock().unwrap();
+        let mut domains: Vec<String> = configs
+            .values()
+            .filter_map(|cfg| cfg.domain.clone())
+            .collect();
+        domains.sort();
+        domains.dedup();
+        domains
+    }
 }
 
-fn build_status(name: &str, cfg: &AppConfig, info: Option<&RuntimeInfo>) -> AppStatus {
+/// Result of matching an incoming proxy request to a managed app.
+#[derive(Debug, Clone)]
+pub struct RouteMatch {
+    pub app_name: String,
+    pub target_port: u16,
+    /// Path prefix to strip before forwarding, when matched by path rather
+    /// than by domain.
+    pub strip_prefix: Option<String>,
+}
+
+fn build_status(name: &str, cfg: &AppConfig, info: Option<&RuntimeInfo>, sys: &System) -> AppStatus {
     let (state, pid, restart_count, started_at, last_exit_code) = match info {
         Some(i) => (i.state, i.pid, i.restart_count, i.started_at, i.last_exit_code),
         None => (AppState::Stopped, None, 0, None, None),
     };
     let uptime_seconds = started_at.map(|t| (Utc::now() - t).num_seconds().max(0) as u64);
+    let (cpu_percent, memory_bytes) = pid
+        .and_then(|p| sys.process(Pid::from_u32(p)))
+        .map(|proc| (Some(proc.cpu_usage()), Some(proc.memory())))
+        .unwrap_or((None, None));
     AppStatus {
         name: name.to_string(),
         state,
         pid,
         restart_count,
         uptime_seconds,
+        cpu_percent,
+        memory_bytes,
         runtime: cfg.runtime,
         port: cfg.port,
         domain: cfg.domain.clone(),
+        path_prefix: cfg.path_prefix.clone(),
         last_exit_code,
     }
 }

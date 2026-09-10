@@ -1,4 +1,4 @@
-use harbor_core::{AddAppRequest, AppStatus, ErrorResponse, LogsResponse};
+use harbor_core::{AddAppRequest, AppStatus, ErrorResponse, LogsResponse, ReloadResponse};
 
 pub struct Client {
     http: reqwest::Client,
@@ -104,6 +104,16 @@ impl Client {
             .await?;
         Self::check(resp).await?;
         Ok(())
+    }
+
+    pub async fn apply(&self) -> anyhow::Result<ReloadResponse> {
+        let resp = self
+            .http
+            .post(self.url("/reload"))
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        Ok(Self::check(resp).await?.json().await?)
     }
 
     pub async fn logs(&self, name: &str, lines: usize) -> anyhow::Result<LogsResponse> {

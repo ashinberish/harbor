@@ -6,7 +6,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use harbor_core::{AddAppRequest, AppConfig, ErrorResponse, LogsResponse, RestartPolicy};
+use harbor_core::{AddAppRequest, AppConfig, ErrorResponse, LogsResponse, ReloadResponse, RestartPolicy};
 use serde::Deserialize;
 
 use crate::supervisor::Supervisor;
@@ -28,6 +28,8 @@ pub fn router(state: AppState) -> Router {
         .route("/apps/:name/stop", post(stop_app))
         .route("/apps/:name/restart", post(restart_app))
         .route("/apps/:name/logs", get(get_logs))
+        .route("/apps/:name/config", get(get_app_config).put(update_app_config))
+        .route("/reload", post(reload))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
 
     Router::new()
@@ -93,6 +95,7 @@ async fn add_app(State(state): State<AppState>, Json(req): Json<AddAppRequest>) 
         working_dir: None,
         port: req.port,
         domain: req.domain,
+        path_prefix: req.path_prefix,
         env: req.env,
         restart_policy: req.restart_policy.unwrap_or(RestartPolicy::OnFailure),
         restart_backoff_seconds: 1,
@@ -150,6 +153,47 @@ async fn get_logs(
     match state.supervisor.tail_logs(&name, lines) {
         Ok((stdout, stderr)) => Json(LogsResponse { name, stdout, stderr }).into_response(),
         Err(e) => err(StatusCode::NOT_FOUND, &e.to_string()),
+    }
+}
+
+/// `GET /apps/:name/config` — the app's full declarative config, for a
+/// config editor to load and let the user modify (FR24).
+async fn get_app_config(State(state): State<AppState>, AxPath(name): AxPath<String>) -> Response {
+    match state.supervisor.get_config(&name) {
+        Some(cfg) => Json(cfg).into_response(),
+        None => err(StatusCode::NOT_FOUND, &format!("app '{name}' not found")),
+    }
+}
+
+/// `PUT /apps/:name/config` — validate and persist an edited config
+/// (FR24). Takes effect for routing immediately; a running process picks
+/// up a changed command/env/working_dir on its next start or restart.
+async fn update_app_config(
+    State(state): State<AppState>,
+    AxPath(name): AxPath<String>,
+    Json(config): Json<AppConfig>,
+) -> Response {
+    if config.name != name {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "config 'name' must match the URL and cannot be changed here",
+        );
+    }
+    match state.supervisor.update_config(config) {
+        Ok(()) => match state.supervisor.status(&name) {
+            Some(status) => Json(status).into_response(),
+            None => StatusCode::NO_CONTENT.into_response(),
+        },
+        Err(e) => err(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string()),
+    }
+}
+
+/// `POST /reload` — explicit config apply, for when file-watch hot-reload
+/// isn't running or a caller wants a synchronous confirmation (FR14).
+async fn reload(State(state): State<AppState>) -> Response {
+    match state.supervisor.reload_configs() {
+        Ok(apps_loaded) => Json(ReloadResponse { apps_loaded }).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
