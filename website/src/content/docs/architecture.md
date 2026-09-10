@@ -250,12 +250,26 @@ bearer token on every route except `/health` (FR26):
 | `POST` | `/apps/:name/stop` | Stop an app. |
 | `POST` | `/apps/:name/restart` | Restart an app. |
 | `GET` | `/apps/:name/logs?lines=N` | Tail captured stdout/stderr. |
+| `GET` | `/apps/:name/config` | Full declarative config for one app (used by the GUI's config editor). |
+| `PUT` | `/apps/:name/config` | Validate and persist an edited config. |
 | `POST` | `/reload` | Explicit config reload (`harbor apply`). |
 
-The CLI is a thin client over this API — the GUI planned for a later phase
-is expected to be another client of the same surface (PRD G4).
+The CLI and the GUI are both thin clients over this API (PRD G4) — neither
+talks to the supervisor directly.
 
-## What's not here yet
+## The GUI (`gui/`)
 
-The GUI (Phase 4) doesn't exist in this codebase yet — see
-[Roadmap & Status](/harbor/roadmap/).
+A Tauri v2 app: a Rust backend (`gui/src-tauri`) wrapping the same
+management API with one `tauri::command` per endpoint above, and a React
++ TypeScript frontend (`gui/src`) that only calls `invoke()`. Keeping the
+HTTP client in Rust rather than the webview means the bearer token (read
+from `~/.harbor/token`, same as the CLI) never reaches frontend JS, and
+sidesteps any CORS concerns.
+
+- **Dashboard** — the app table, polling `list_apps` every 2s.
+- **Add-app wizard** — calls the local `detect_runtime` command (the same
+  `harbor_core::detect` logic the daemon uses) before submitting `add_app`.
+- **Log viewer** — polls `get_logs`, tabbed stdout/stderr with auto-scroll.
+- **Config editor** — `get_app_config`/`update_app_config`, with the same
+  shape of validation (non-empty path/command, port range, restart-backoff
+  ordering) checked client-side before the server's own validation runs.

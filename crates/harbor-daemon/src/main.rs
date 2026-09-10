@@ -93,6 +93,17 @@ pub async fn run_daemon(shutdown: impl Future<Output = ()> + Send + 'static) -> 
         }
     }
 
+    {
+        let supervisor = supervisor.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+                supervisor.refresh_process_stats();
+            }
+        });
+    }
+
     if global.proxy.enabled {
         rustls::crypto::aws_lc_rs::default_provider()
             .install_default()

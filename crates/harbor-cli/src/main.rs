@@ -243,8 +243,8 @@ fn print_status(apps: &[harbor_core::AppStatus]) {
         return;
     }
     println!(
-        "{:<20} {:<8} {:<11} {:<8} {:<6} {:<9} {:<20}",
-        "NAME", "RUNTIME", "STATE", "PID", "PORT", "RESTARTS", "DOMAIN"
+        "{:<20} {:<8} {:<11} {:<8} {:<7} {:<9} {:<6} {:<9} {:<20}",
+        "NAME", "RUNTIME", "STATE", "PID", "CPU%", "MEM", "PORT", "RESTARTS", "DOMAIN"
     );
     for app in apps {
         let state_marker = match app.state {
@@ -254,15 +254,32 @@ fn print_status(apps: &[harbor_core::AppStatus]) {
             AppState::Crashed => "crashed",
         };
         println!(
-            "{:<20} {:<8} {:<11} {:<8} {:<6} {:<9} {:<20}",
+            "{:<20} {:<8} {:<11} {:<8} {:<7} {:<9} {:<6} {:<9} {:<20}",
             app.name,
             app.runtime.as_str(),
             state_marker,
             app.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            app.cpu_percent.map(|c| format!("{c:.1}")).unwrap_or_else(|| "-".into()),
+            app.memory_bytes.map(format_bytes).unwrap_or_else(|| "-".into()),
             app.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             app.restart_count,
             app.domain.clone().unwrap_or_else(|| "-".into()),
         );
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{value:.0}{}", UNITS[unit])
+    } else {
+        format!("{value:.1}{}", UNITS[unit])
     }
 }
 

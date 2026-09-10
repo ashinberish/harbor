@@ -14,7 +14,7 @@ in the repo). This page tracks what's actually built.
 | 1 | Daemon + CLI MVP, process supervision | **Implemented** |
 | 2 | Reverse proxy, ACME/TLS, config hot-reload | **Implemented** |
 | 3 | Native OS service registration (systemd, launchd, Windows Service) | **Implemented** (this site documents it) |
-| 4 | GUI (Tauri dashboard) | Not started |
+| 4 | GUI (Tauri dashboard) | **Implemented** |
 | 5 | Auth hardening, metrics/alerting | Not started |
 
 ## Implemented (Phase 1)
@@ -80,10 +80,40 @@ in the repo). This page tracks what's actually built.
   for macOS here. None of the three were exercised against a real
   systemd, launchd, or Windows SCM instance.
 
+## Implemented (Phase 4)
+
+- CPU% and memory sampling per app in the daemon (`sysinfo`, refreshed
+  every 2s), exposed via the status API (FR21).
+- A `GET`/`PUT /apps/:name/config` endpoint for reading and editing an
+  app's full declarative config, validated server-side (FR24).
+- Desktop GUI (Tauri v2 + React/TypeScript, `gui/`):
+  - **Dashboard** — live app table (status, PID, CPU%, memory, uptime,
+    restart count, domain/port), polled every 2s, with
+    start/stop/restart/remove actions (FR21).
+  - **Add-app wizard** — a two-step flow: pick a directory (with a
+    "Detect runtime" button using the same auto-detection as `harbor
+    add`), then configure name/runtime/command/port/domain/path
+    prefix/restart policy/env vars (FR22).
+  - **Log viewer** — polling-based stdout/stderr tabs with auto-scroll,
+    matching the CLI's `logs` behavior (FR23).
+  - **Config editor** — loads an app's config, edits it client-side with
+    validation (non-empty path/command, port range, backoff ordering)
+    before submitting to the server-validated `PUT` endpoint (FR24).
+  - The Rust side of the app calls the daemon's HTTP API directly and
+    exposes each operation as a `tauri::command`; the frontend only calls
+    `invoke()`, so the bearer token never reaches the webview.
+- Verified headlessly end-to-end: the built app launched under a virtual
+  X server (Xvfb) and driven with `xdotool` against a real running
+  `harbord` — added an app through the wizard, watched its status/CPU/
+  memory update live after starting it from the CLI, viewed its real
+  stdout, edited and saved its config (confirmed against the on-disk
+  TOML), and removed it, screenshotting each step. Not run on a real
+  desktop session on any platform.
+
 ## Not yet implemented
 
-- GUI (FR21–FR24, Phase 4).
-- Log rotation, CPU/memory metrics, multi-user auth hardening (Phase 5).
+- Log rotation, metrics retention/history, multi-user auth hardening
+  (Phase 5).
 
 ## Open questions (from the PRD)
 

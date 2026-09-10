@@ -8,10 +8,11 @@ together IIS+ARR+NSSM (Windows) or nginx+systemd (Linux/macOS) by hand. See
 docs site at **https://ashinberish.github.io/harbor/** for guides and
 reference.
 
-This repository currently implements **Phases 1–3** of the PRD: process
-supervision, a reverse proxy with TLS/ACME and config hot-reload, and
-native OS service registration. The GUI is the remaining later phase and
-not yet implemented (see [Status](#status) below).
+This repository currently implements **Phases 1–4** of the PRD: process
+supervision, a reverse proxy with TLS/ACME and config hot-reload, native OS
+service registration, and a desktop GUI. Phase 5 (log rotation, metrics
+retention, multi-user auth hardening) is the remaining later phase (see
+[Status](#status) below).
 
 ## Workspace layout
 
@@ -26,6 +27,9 @@ not yet implemented (see [Status](#status) below).
   HTTP: `add`, `start`, `stop`, `restart`, `status`, `logs`, `remove`,
   `apply`, plus `service install|uninstall|start|stop|status` for OS
   service registration.
+- `gui/` — desktop GUI (Tauri v2 + React/TypeScript): a live app dashboard,
+  an add-app wizard, a streaming log viewer, and a config editor. See
+  [Running the GUI](#running-the-gui) below.
 
 ## Building
 
@@ -104,9 +108,32 @@ running the command), starts the service immediately, and `harbor service
 status`/`stop`/`start`/`uninstall` manage it afterward. See the docs site's
 Architecture page for how each platform's backend works.
 
+## Running the GUI
+
+The GUI talks to the same management API as the CLI (it reads
+`~/.harbor/token` itself, server-side — the token never reaches the
+webview), so start the daemon first, same as above. Then, from `gui/`:
+
+```sh
+npm install
+npm run tauri dev
+```
+
+Requires a Rust toolchain, Node.js, and (on Linux) the Tauri/webkit2gtk
+system packages — see [Tauri's prerequisites
+guide](https://tauri.app/start/prerequisites/). `npm run tauri build`
+produces a native installer/bundle instead.
+
+The dashboard lists managed apps with live status, PID, CPU%, memory, and
+restart count (polled every 2s); each row has start/stop/restart/remove
+actions plus buttons that open a streaming log viewer and a config editor.
+"+ Add App" opens a two-step wizard: pick a directory (with a "Detect
+runtime" button backed by the same auto-detection as `harbor add`), then
+configure name/runtime/command/port/domain/restart policy/env vars.
+
 ## Status
 
-Implemented (Phases 1–3):
+Implemented (Phases 1–4):
 
 - Runtime auto-detection for Python/Node/.NET/Java/Rust project markers,
   with manual override via `--runtime`/`--command` (FR1, FR2).
@@ -141,11 +168,20 @@ Implemented (Phases 1–3):
 - Per-app access logs (method, path, status, latency) (FR12).
 - Config hot-reload: the daemon watches `apps_dir` and applies changes
   automatically, plus an explicit `harbor apply` (FR14).
+- CPU% and memory-per-app sampling in the daemon (`sysinfo`, refreshed
+  every 2s), exposed via the status API and consumed by both `harbor
+  status` and the GUI dashboard (FR21).
+- Desktop GUI (Tauri v2 + React/TypeScript, `gui/`): live dashboard with
+  start/stop/restart/remove (FR21), an add-app wizard with runtime
+  auto-detection (FR22), a streaming log viewer (FR23), and a config editor
+  with client- and server-side validation (FR24). The Rust side of the app
+  talks to the daemon's HTTP API directly — the frontend only calls
+  `invoke()`, so the bearer token never reaches the webview.
 
 Not yet implemented (later phase per the PRD):
 
-- GUI (FR21–FR24, Phase 4).
-- Log rotation, CPU/memory metrics, multi-user auth hardening (Phase 5).
+- Log rotation, metrics retention/history, multi-user auth hardening
+  (Phase 5).
 
 **A note on cross-platform verification**: this project was built and
 tested on Linux. The systemd backend was verified as far as this sandbox
@@ -161,3 +197,16 @@ macOS here because an unrelated dependency needs a real macOS SDK. None of
 the three service backends have been exercised against a real systemd,
 launchd, or Windows SCM instance — treat them as implemented-and-checked,
 not field-tested.
+
+**A note on GUI verification**: this sandbox has no interactive display, so
+the GUI was built and tested headlessly — `cargo build`/`clippy` on the
+Tauri backend, `tsc`/`vite build` on the frontend, then the actual app
+launched under a virtual X server (Xvfb) and driven end-to-end with
+`xdotool` against a real running `harbord` and a real test app: adding an
+app through the wizard (including runtime auto-detection), watching its
+status/PID/CPU/memory update live via polling after starting it from the
+CLI, viewing its real stdout log, editing and saving its config (verified
+against the on-disk TOML), and removing it — all screenshotted at each
+step to confirm the UI rendered and updated correctly. It has not been run
+on a real desktop session on any platform, and the app icon is still
+Tauri's scaffold default rather than a Harbor-specific one.

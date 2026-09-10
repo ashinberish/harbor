@@ -168,6 +168,13 @@ pub struct AppStatus {
     pub pid: Option<u32>,
     pub restart_count: u32,
     pub uptime_seconds: Option<u64>,
+    /// CPU usage as a percentage (0-100 per core, so may exceed 100 on a
+    /// multi-core system) sampled roughly every 2 seconds. `None` when the
+    /// app isn't running or a sample isn't available yet (FR21).
+    pub cpu_percent: Option<f32>,
+    /// Resident memory in bytes, same sampling cadence as `cpu_percent`
+    /// (FR21).
+    pub memory_bytes: Option<u64>,
     pub runtime: RuntimeKind,
     pub port: Option<u16>,
     pub domain: Option<String>,

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use harbor_core::{AppConfig, AppState, AppStatus, HarborPaths, RestartPolicy};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -40,6 +41,7 @@ pub struct Supervisor {
     pub paths: HarborPaths,
     configs: Mutex<HashMap<String, AppConfig>>,
     runtime: Mutex<HashMap<String, RuntimeInfo>>,
+    sys: Mutex<System>,
 }
 
 impl Supervisor {
@@ -48,7 +50,19 @@ impl Supervisor {
             paths,
             configs: Mutex::new(HashMap::new()),
             runtime: Mutex::new(HashMap::new()),
+            sys: Mutex::new(System::new_all()),
         }
+    }
+
+    /// Re-sample CPU/memory for every currently-tracked process (FR21).
+    /// CPU usage is a delta since the previous sample, so this is meant to
+    /// be called periodically from a background loop, not once per status
+    /// request — `main.rs` spawns that loop.
+    pub fn refresh_process_stats(&self) {
+        self.sys
+            .lock()
+            .unwrap()
+            .refresh_processes(ProcessesToUpdate::All, true);
     }
 
     /// Load every `<apps_dir>/*.toml` app config from disk into memory.
@@ -95,6 +109,30 @@ impl Supervisor {
 
     pub fn exists(&self, name: &str) -> bool {
         self.configs.lock().unwrap().contains_key(name)
+    }
+
+    pub fn get_config(&self, name: &str) -> Option<AppConfig> {
+        self.configs.lock().unwrap().get(name).cloned()
+    }
+
+    /// Replace an existing app's config wholesale (FR24). Takes effect for
+    /// routing immediately (the proxy reads the live config on every
+    /// request); a running process only picks up a changed command/env/
+    /// working_dir on its next start or restart, same as a file-watch
+    /// reload.
+    pub fn update_config(&self, config: AppConfig) -> anyhow::Result<()> {
+        if !self.exists(&config.name) {
+            anyhow::bail!("app '{}' not found", config.name);
+        }
+        if config.command.is_empty() {
+            anyhow::bail!("command must not be empty");
+        }
+        if config.path.as_os_str().is_empty() {
+            anyhow::bail!("path must not be empty");
+        }
+        config.save(&self.paths.app_config_path(&config.name))?;
+        self.configs.lock().unwrap().insert(config.name.clone(), config);
+        Ok(())
     }
 
     pub fn start_app(self: &std::sync::Arc<Self>, name: &str) -> anyhow::Result<()> {
@@ -167,15 +205,17 @@ impl Supervisor {
         let cfg = configs.get(name)?;
         let runtime = self.runtime.lock().unwrap();
         let info = runtime.get(name);
-        Some(build_status(name, cfg, info))
+        let sys = self.sys.lock().unwrap();
+        Some(build_status(name, cfg, info, &sys))
     }
 
     pub fn status_all(&self) -> Vec<AppStatus> {
         let configs = self.configs.lock().unwrap();
         let runtime = self.runtime.lock().unwrap();
+        let sys = self.sys.lock().unwrap();
         let mut out: Vec<AppStatus> = configs
             .iter()
-            .map(|(name, cfg)| build_status(name, cfg, runtime.get(name)))
+            .map(|(name, cfg)| build_status(name, cfg, runtime.get(name), &sys))
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
@@ -285,18 +325,24 @@ pub struct RouteMatch {
     pub strip_prefix: Option<String>,
 }
 
-fn build_status(name: &str, cfg: &AppConfig, info: Option<&RuntimeInfo>) -> AppStatus {
+fn build_status(name: &str, cfg: &AppConfig, info: Option<&RuntimeInfo>, sys: &System) -> AppStatus {
     let (state, pid, restart_count, started_at, last_exit_code) = match info {
         Some(i) => (i.state, i.pid, i.restart_count, i.started_at, i.last_exit_code),
         None => (AppState::Stopped, None, 0, None, None),
     };
     let uptime_seconds = started_at.map(|t| (Utc::now() - t).num_seconds().max(0) as u64);
+    let (cpu_percent, memory_bytes) = pid
+        .and_then(|p| sys.process(Pid::from_u32(p)))
+        .map(|proc| (Some(proc.cpu_usage()), Some(proc.memory())))
+        .unwrap_or((None, None));
     AppStatus {
         name: name.to_string(),
         state,
         pid,
         restart_count,
         uptime_seconds,
+        cpu_percent,
+        memory_bytes,
         runtime: cfg.runtime,
         port: cfg.port,
         domain: cfg.domain.clone(),

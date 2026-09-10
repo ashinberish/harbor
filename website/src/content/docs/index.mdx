@@ -7,14 +7,15 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 Harbor is a cross-platform, language-agnostic application hosting platform.
 It replaces the combination of IIS + ARR + NSSM (or nginx + systemd/PM2 on
-Linux) with a single daemon, CLI, and — eventually — GUI: point it at a
-Python, Node.js, .NET, Java, or Rust project and it handles process
-supervision, restart policy, log capture, and reverse-proxied HTTPS through
-one consistent command surface, on Windows, macOS, or Linux alike.
+Linux) with a single daemon, CLI, and GUI: point it at a Python, Node.js,
+.NET, Java, or Rust project and it handles process supervision, restart
+policy, log capture, and reverse-proxied HTTPS through one consistent
+command surface, on Windows, macOS, or Linux alike.
 
-This site documents **Phases 1–3**: process supervision, a reverse proxy
-with TLS/ACME and config hot-reload, and native OS service registration.
-The GUI is the remaining later phase — see
+This site documents **Phases 1–4**: process supervision, a reverse proxy
+with TLS/ACME and config hot-reload, native OS service registration, and a
+desktop GUI. Phase 5 (log rotation, metrics retention, multi-user auth
+hardening) is the remaining later phase — see
 [Roadmap & Status](/harbor/roadmap/) for exactly what's implemented today
 versus what's planned.
 
@@ -52,6 +53,11 @@ versus what's planned.
 		`harbor service install` registers the daemon with systemd, launchd, or
 		a real Windows Service, so it starts at boot without a terminal left
 		open.
+	</Card>
+	<Card title="Desktop GUI" icon="seti:shell">
+		A Tauri dashboard with live status/CPU/memory, an add-app wizard, a
+		streaming log viewer, and a config editor — the same daemon API the
+		CLI uses.
 	</Card>
 </CardGrid>
 
