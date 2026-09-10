@@ -53,25 +53,7 @@ impl Supervisor {
 
     /// Load every `<apps_dir>/*.toml` app config from disk into memory.
     pub fn load_configs(&self) -> anyhow::Result<()> {
-        if !self.paths.apps_dir.is_dir() {
-            return Ok(());
-        }
-        let mut configs = self.configs.lock().unwrap();
-        let mut runtime = self.runtime.lock().unwrap();
-        for entry in std::fs::read_dir(&self.paths.apps_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
-                continue;
-            }
-            match AppConfig::load(&path) {
-                Ok(cfg) => {
-                    runtime.entry(cfg.name.clone()).or_default();
-                    configs.insert(cfg.name.clone(), cfg);
-                }
-                Err(e) => warn!("skipping invalid app config {}: {e}", path.display()),
-            }
-        }
+        self.reload_configs()?;
         Ok(())
     }
 
@@ -207,6 +189,100 @@ impl Supervisor {
         let stderr = tail_file(&self.paths.app_log_path(name, "err"), lines);
         Ok((stdout, stderr))
     }
+
+    /// Re-read every `<apps_dir>/*.toml` from disk, adding newly-created
+    /// apps and updating in-memory config for existing ones (FR14). Apps
+    /// whose file was deleted out-of-band are left running under their
+    /// last-loaded config until explicitly removed — this only picks up
+    /// additions and edits, matching `harbor apply`'s job of applying
+    /// config changes, not detecting manual file deletion.
+    pub fn reload_configs(&self) -> anyhow::Result<usize> {
+        if !self.paths.apps_dir.is_dir() {
+            return Ok(0);
+        }
+        let mut loaded = 0;
+        let mut configs = self.configs.lock().unwrap();
+        let mut runtime = self.runtime.lock().unwrap();
+        for entry in std::fs::read_dir(&self.paths.apps_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            match AppConfig::load(&path) {
+                Ok(cfg) => {
+                    runtime.entry(cfg.name.clone()).or_default();
+                    configs.insert(cfg.name.clone(), cfg);
+                    loaded += 1;
+                }
+                Err(e) => warn!("skipping invalid app config {}: {e}", path.display()),
+            }
+        }
+        Ok(loaded)
+    }
+
+    /// Find the app whose `domain` or `path_prefix` matches an incoming
+    /// proxied request (FR8). An exact `Host` match always wins over a
+    /// path-prefix match; among path-prefix matches, the longest prefix
+    /// wins. Only apps with a `port` configured are reachable this way.
+    pub fn resolve_route(&self, host: Option<&str>, path: &str) -> Option<RouteMatch> {
+        let configs = self.configs.lock().unwrap();
+        let host_norm = host.map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase());
+
+        if let Some(h) = &host_norm {
+            for cfg in configs.values() {
+                let Some(port) = cfg.port else { continue };
+                if cfg.domain.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(h)) {
+                    return Some(RouteMatch {
+                        app_name: cfg.name.clone(),
+                        target_port: port,
+                        strip_prefix: None,
+                    });
+                }
+            }
+        }
+
+        let mut best: Option<(&AppConfig, u16, usize)> = None;
+        for cfg in configs.values() {
+            let (Some(prefix), Some(port)) = (&cfg.path_prefix, cfg.port) else {
+                continue;
+            };
+            if path.starts_with(prefix.as_str()) {
+                let len = prefix.len();
+                if best.map(|(_, _, best_len)| len > best_len).unwrap_or(true) {
+                    best = Some((cfg, port, len));
+                }
+            }
+        }
+        best.map(|(cfg, port, _)| RouteMatch {
+            app_name: cfg.name.clone(),
+            target_port: port,
+            strip_prefix: cfg.path_prefix.clone(),
+        })
+    }
+
+    /// Every distinct domain configured across all apps — used to decide
+    /// which domains need a TLS certificate (self-signed or ACME).
+    pub fn configured_domains(&self) -> Vec<String> {
+        let configs = self.configs.lock().unwrap();
+        let mut domains: Vec<String> = configs
+            .values()
+            .filter_map(|cfg| cfg.domain.clone())
+            .collect();
+        domains.sort();
+        domains.dedup();
+        domains
+    }
+}
+
+/// Result of matching an incoming proxy request to a managed app.
+#[derive(Debug, Clone)]
+pub struct RouteMatch {
+    pub app_name: String,
+    pub target_port: u16,
+    /// Path prefix to strip before forwarding, when matched by path rather
+    /// than by domain.
+    pub strip_prefix: Option<String>,
 }
 
 fn build_status(name: &str, cfg: &AppConfig, info: Option<&RuntimeInfo>) -> AppStatus {
@@ -224,6 +300,7 @@ fn build_status(name: &str, cfg: &AppConfig, info: Option<&RuntimeInfo>) -> AppS
         runtime: cfg.runtime,
         port: cfg.port,
         domain: cfg.domain.clone(),
+        path_prefix: cfg.path_prefix.clone(),
         last_exit_code,
     }
 }

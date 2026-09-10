@@ -4,15 +4,15 @@ description: What's implemented today versus the PRD's phased scope.
 ---
 
 Harbor's full requirements live in the PRD
-([`docs/PRD.md`](https://github.com/ashinberish/harbor/blob/cl/lucid-babbage-3kdpkl/docs/PRD.md)
+([`docs/PRD.md`](https://github.com/ashinberish/harbor/blob/main/docs/PRD.md)
 in the repo). This page tracks what's actually built.
 
 ## Phases
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| 1 | Daemon + CLI MVP, process supervision | **Implemented** (this site documents it) |
-| 2 | Reverse proxy, ACME/TLS, config hot-reload | Not started |
+| 1 | Daemon + CLI MVP, process supervision | **Implemented** |
+| 2 | Reverse proxy, ACME/TLS, config hot-reload | **Implemented** (this site documents it) |
 | 3 | Native OS service registration (systemd, launchd, Windows Service) | Not started |
 | 4 | GUI (Tauri dashboard) | Not started |
 | 5 | Auth hardening, metrics/alerting | Not started |
@@ -29,7 +29,6 @@ in the repo). This page tracks what's actually built.
 - stdout/stderr log capture to per-app files with a tail/follow CLI view;
   no rotation yet (FR6, partial).
 - Declarative per-app TOML config plus a global daemon config (FR13, FR15).
-- `harbor add|start|stop|restart|status|logs|remove` CLI (FR16–FR20).
 - Management API bound to `127.0.0.1` by default, bearer-token auth on all
   routes except `/health` (FR25, FR26).
 - Auto-recovery: previously running apps are restarted when the daemon
@@ -37,11 +36,28 @@ in the repo). This page tracks what's actually built.
   is detected and reaped before its replacement is spawned, so recovery
   never leaves two copies of an app running (NFR3, G6).
 
+## Implemented (Phase 2)
+
+- Reverse proxy routing by domain (`Host`/SNI) and/or path prefix to an
+  app's local port (FR8).
+- WebSocket passthrough, verified with a real HTTP Upgrade handshake and a
+  raw-byte tunnel test through the proxy, not just unit-level routing
+  checks (FR11).
+- HTTPS via `rustls`: a self-signed certificate per domain always, so HTTPS
+  works immediately with no setup; automatic ACME (Let's Encrypt)
+  issuance/renewal over HTTP-01 when a domain is publicly reachable
+  (FR9). Verified against Let's Encrypt's real staging API up to the point
+  that requires public DNS/reachability this dev environment doesn't have.
+- HTTP→HTTPS redirect, on by default and configurable, correct even when
+  the HTTPS listener isn't on the standard port 443 (FR10).
+- Per-app access logs — method, path, status, latency (FR12).
+- Config hot-reload: automatic via a filesystem watch on `apps_dir`, plus
+  an explicit `harbor apply` (FR14).
+- `harbor add|start|stop|restart|status|logs|remove|apply` CLI
+  (FR16–FR20).
+
 ## Not yet implemented
 
-- Reverse proxy, domain/path routing, ACME/TLS, WebSocket passthrough
-  (FR8–FR12, Phase 2).
-- Config hot-reload / `harbor apply` (FR14, Phase 2).
 - Native OS service registration for the daemon itself — Windows Service,
   systemd, launchd (FR7, Phase 3).
 - GUI (FR21–FR24, Phase 4).

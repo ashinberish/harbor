@@ -9,13 +9,14 @@ Harbor is a cross-platform, language-agnostic application hosting platform.
 It replaces the combination of IIS + ARR + NSSM (or nginx + systemd/PM2 on
 Linux) with a single daemon, CLI, and — eventually — GUI: point it at a
 Python, Node.js, .NET, Java, or Rust project and it handles process
-supervision, restart policy, and log capture through one consistent
-command surface, on Windows, macOS, or Linux alike.
+supervision, restart policy, log capture, and reverse-proxied HTTPS through
+one consistent command surface, on Windows, macOS, or Linux alike.
 
-This site documents the **Phase 1** daemon + CLI process-supervision MVP.
-Reverse proxy, automatic SSL, native OS service install, and the GUI are
-later phases — see [Roadmap & Status](/harbor/roadmap/) for exactly what's
-implemented today versus what's planned.
+This site documents **Phase 1 and Phase 2**: process supervision plus a
+reverse proxy with TLS/ACME and config hot-reload. Native OS service
+install and the GUI are later phases — see
+[Roadmap & Status](/harbor/roadmap/) for exactly what's implemented today
+versus what's planned.
 
 ## What Harbor does today
 
@@ -37,6 +38,15 @@ implemented today versus what's planned.
 		Apps come back after a daemon restart — and a live orphan left behind by
 		an unclean shutdown is detected and reaped before its replacement
 		spawns.
+	</Card>
+	<Card title="Reverse proxy + HTTPS" icon="approve-check">
+		Route by domain or URL path to an app's port, with WebSocket
+		passthrough. HTTPS works immediately via an auto-generated self-signed
+		certificate, upgraded transparently to a real one if you enable ACME.
+	</Card>
+	<Card title="Hot-reload" icon="magnifier">
+		The daemon watches your app configs and applies changes automatically —
+		or trigger it explicitly with `harbor apply`.
 	</Card>
 </CardGrid>
 

@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How the Harbor daemon supervises processes and recovers from crashes.
+description: How the Harbor daemon supervises processes, proxies traffic, and recovers from crashes.
 ---
 
 ## Workspace layout
@@ -8,7 +8,7 @@ description: How the Harbor daemon supervises processes and recovers from crashe
 ```
 crates/
 ├── harbor-core    # shared config types, runtime auto-detection, API DTOs
-├── harbor-daemon  # harbord binary — the process supervisor + management API
+├── harbor-daemon  # harbord binary — supervisor + reverse proxy + management API
 └── harbor-cli     # harbor binary — talks to harbord over HTTP
 ```
 
@@ -27,8 +27,12 @@ On startup, `harbord`:
 3. Loads every `apps/*.toml` into memory.
 4. For each app whose last known desired state was "running", spawns it —
    this is auto-recovery after a daemon restart (see below).
-5. Starts the Axum HTTP server bound to `bind_addr` (`127.0.0.1:4780` by
-   default).
+5. If the reverse proxy is enabled: provisions TLS certificates, binds the
+   HTTP and HTTPS listeners, and (if configured) starts the ACME
+   issuance/renewal loop.
+6. Starts watching `apps_dir` for config changes.
+7. Starts the Axum management API bound to `bind_addr` (`127.0.0.1:4780`
+   by default).
 
 ### Process supervision
 
@@ -65,6 +69,104 @@ copy. Instead, before spawning, each supervised task checks whether the
 recorded PID is still alive and, if so, terminates it first — so recovery
 always converges on exactly one running instance per app.
 
+## The reverse proxy
+
+The proxy is a hand-rolled `hyper` 1.x service, not axum — routing needs
+direct access to the raw request/connection to support WebSocket upgrades,
+which don't fit neatly through axum's extractor model. Both the plain-HTTP
+and TLS listeners run the same connection handler
+(`proxy::serve_one_connection`); the TLS listener just wraps each accepted
+`TcpStream` in a `tokio_rustls::TlsAcceptor` first.
+
+**Routing (FR8).** There's no separate routing table — every request asks
+`Supervisor::resolve_route(host, path)` to scan the live app-config map
+directly. This means config hot-reload and proxy routing need no
+coordination with each other: the moment `apps_dir` is reloaded, the very
+next request sees the new routes. An exact `Host`/SNI match against an
+app's `domain` always wins; otherwise the longest matching `path_prefix`
+wins. No match is a `404`.
+
+**WebSocket passthrough (FR11).** On an `Upgrade: websocket` request, the
+handler opens a dedicated connection to the target app (bypassing the
+normal per-request path, which doesn't preserve the raw connection), sends
+the upgrade request, and — if the app responds `101 Switching Protocols` —
+spawns a task that waits for both the client's and the upstream's
+`hyper::upgrade::on()` futures to resolve, then splices raw bytes between
+them with `tokio::io::copy_bidirectional` until either side closes. This
+was verified with a hand-rolled RFC 6455 handshake and a raw-byte echo
+tunnel test, not just unit tests of the routing logic.
+
+**HTTP→HTTPS redirect (FR10).** The plain-HTTP listener 301-redirects to
+`https://<host>:<https-port>/<path>` when `https_redirect` is on and an
+HTTPS listener is actually running — including the port when it isn't the
+standard 443, since Harbor's own default (`8443`) isn't. The one exception
+is `/.well-known/acme-challenge/*`, always answered directly so ACME
+HTTP-01 validation works regardless of the redirect setting.
+
+**Access logs (FR12).** Every proxied request appends one line — method,
+path, status, latency — to `logs/<app>.access.log`, whichever app's route
+served it.
+
+## TLS and ACME
+
+`tls::CertStore` implements rustls's `ResolvesServerCert`, picking a
+certificate by SNI from an in-memory map built from
+`certs/<domain>/{cert.pem,key.pem}`. Every domain gets a **self-signed**
+certificate generated on first use (via `rcgen`) regardless of ACME
+settings — HTTPS always works, even offline or before DNS is set up. A
+fixed default certificate (for `localhost`) covers requests with no SNI or
+an unrecognized one, so path-prefix-routed apps (which don't need a domain
+at all) stay reachable over HTTPS too.
+
+When `proxy.acme.enabled` is set, a background task (`acme.rs`, built on
+`instant-acme`) requests a real certificate per domain over HTTP-01:
+create/reuse an ACME account, create an order, fetch the HTTP-01 challenge
+token, serve its key authorization at
+`/.well-known/acme-challenge/<token>` (via a shared map the plain-HTTP
+listener consults), signal readiness, poll for validation, then finalize
+and store the issued cert — overwriting the self-signed one in
+`CertStore` in place, with no listener restart. A domain stays on
+self-signed if ACME issuance fails for any reason (no public DNS yet,
+validation unreachable, rate-limited, ...); the loop just retries roughly
+every 24 hours skipping domains that don't need it yet. Renewal is a fixed
+60-day threshold against `acme-meta.json`'s issuance timestamp, not the
+certificate's actual `notAfter` — close enough for Let's Encrypt's normal
+90-day lifetime without adding an X.509-parsing dependency.
+
+This was tested against Let's Encrypt's real **staging** API (the default
+`directory_url`) as far as this sandboxed environment allows: account
+creation, order creation, authorization retrieval, and challenge placement
+all succeed against the live server; validation itself fails only because
+nothing in this dev environment is publicly DNS-resolvable and
+reachable on port 80 — exactly the condition a real deployment needs to
+satisfy for ACME to work at all. On that expected failure, the code
+correctly falls back to the working self-signed certificate rather than
+taking the domain's HTTPS down.
+
+Binding `http_bind_addr`/`https_bind_addr` to the standard `80`/`443`
+needs a privilege Harbor doesn't request for you: on Linux, grant it with
+`setcap 'cap_net_bind_service=+ep' /path/to/harbord` or a systemd unit's
+`AmbientCapabilities=CAP_NET_BIND_SERVICE`; on Windows, an admin can grant
+a service account that right. Harbor defaults to `8080`/`8443` precisely
+so it runs without any of that out of the box.
+
+## Config hot-reload
+
+`Supervisor::reload_configs()` re-scans `apps/*.toml` and updates the live
+config map — the same method both paths below call:
+
+- **Automatic (FR14).** `watch.rs` uses the `notify` crate (inotify on
+  Linux, kqueue on macOS/BSD, `ReadDirectoryChangesW` on Windows) to watch
+  `apps_dir`, debouncing bursts of filesystem events (editors/`cp` produce
+  several per save) by 300ms before reloading.
+- **Explicit.** `POST /reload`, exposed as `harbor apply`, for a
+  synchronous confirmation or as a fallback if the watch isn't running.
+
+New or edited apps are picked up this way; an app whose file is deleted
+out-of-band keeps running under its last-loaded config until explicitly
+`harbor remove`d — reload only applies additions and edits, matching
+FR14's "apply config changes," not "detect manual file deletion."
+
 ## The management API
 
 Axum-based HTTP API, bound to localhost by default (FR25) and requiring a
@@ -81,12 +183,13 @@ bearer token on every route except `/health` (FR26):
 | `POST` | `/apps/:name/stop` | Stop an app. |
 | `POST` | `/apps/:name/restart` | Restart an app. |
 | `GET` | `/apps/:name/logs?lines=N` | Tail captured stdout/stderr. |
+| `POST` | `/reload` | Explicit config reload (`harbor apply`). |
 
 The CLI is a thin client over this API — the GUI planned for a later phase
 is expected to be another client of the same surface (PRD G4).
 
 ## What's not here yet
 
-The reverse proxy, ACME/TLS termination, and native OS service registration
-described in the PRD are later phases and don't exist in this codebase yet
-— see [Roadmap & Status](/harbor/roadmap/).
+Native OS service registration for the daemon itself (Phase 3) and the GUI
+(Phase 4) don't exist in this codebase yet — see
+[Roadmap & Status](/harbor/roadmap/).

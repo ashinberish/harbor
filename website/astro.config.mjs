@@ -16,7 +16,7 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/ashinberish/harbor' },
       ],
       editLink: {
-        baseUrl: 'https://github.com/ashinberish/harbor/edit/cl/lucid-babbage-3kdpkl/website/',
+        baseUrl: 'https://github.com/ashinberish/harbor/edit/main/website/',
       },
       customCss: ['./src/styles/custom.css'],
       head: [

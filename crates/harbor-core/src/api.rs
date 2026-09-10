@@ -14,6 +14,7 @@ pub struct AddAppRequest {
     pub command: Option<Vec<String>>,
     pub port: Option<u16>,
     pub domain: Option<String>,
+    pub path_prefix: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub restart_policy: Option<RestartPolicy>,
@@ -29,4 +30,10 @@ pub struct LogsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+/// Response to `POST /reload` (FR14: `harbor apply`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReloadResponse {
+    pub apps_loaded: usize,
 }

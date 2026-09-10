@@ -21,3 +21,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 rand.workspace = true
 chrono.workspace = true
+hyper-util = { version = "0.1.20", features = ["client", "client-legacy", "http1", "http2", "server", "server-auto", "server-graceful", "service", "tokio"] }
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+hyper = { version = "1.11.1", features = ["full"] }
+rustls = "0.23.44"
+tokio-rustls = "0.26.5"
+rustls-pemfile = "2.2.0"
+rcgen = "0.14.10"
+rustls-pki-types = "1.15.1"
+instant-acme = { version = "0.8.5", features = ["rcgen"] }
+notify = "8.2.0"

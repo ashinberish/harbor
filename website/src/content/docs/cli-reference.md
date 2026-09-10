@@ -13,7 +13,7 @@ Register an app from a project directory.
 
 ```sh
 harbor add <path> [--name <name>] [--runtime <runtime>] [--command <command>] \
-  [--port <port>] [--domain <domain>] [--restart <policy>]
+  [--port <port>] [--domain <domain>] [--path-prefix <prefix>] [--restart <policy>]
 ```
 
 | Flag | Description |
@@ -22,8 +22,9 @@ harbor add <path> [--name <name>] [--runtime <runtime>] [--command <command>] \
 | `--name` | App name. Defaults to the directory's basename. |
 | `--runtime` | Overrides auto-detection. One of `python`, `node`, `dotnet`, `java`, `rust`, `custom`. |
 | `--command` | Overrides the guessed launch command, e.g. `--command "python3 app.py"`. Split on whitespace — for anything more complex, edit the app's TOML file directly. |
-| `--port` | Port the app listens on (informational in Phase 1; used by the reverse proxy in a later phase). |
-| `--domain` | Domain to route to the app (informational in Phase 1; same caveat). |
+| `--port` | Port the app listens on. Required for the reverse proxy to route to it. |
+| `--domain` | Routes requests by `Host` header/SNI to this app (FR8) and provisions a TLS certificate for the domain. |
+| `--path-prefix` | Routes requests whose path starts with this prefix to this app, prefix stripped before forwarding (FR8). |
 | `--restart` | Restart policy: `never`, `on-failure` (default), or `always`. |
 
 ## `harbor start` / `stop` / `restart`
@@ -66,3 +67,14 @@ harbor remove <app>
 ```
 
 Stops the app if it's running, then deletes its config and log files.
+
+## `harbor apply`
+
+```sh
+harbor apply
+```
+
+Reloads app configs from disk immediately and reports how many were
+loaded. The daemon also watches `apps_dir` and applies changes
+automatically (FR14) — `apply` is for confirming a change landed
+synchronously, or as a fallback if the watch isn't running.

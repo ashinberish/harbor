@@ -30,6 +30,8 @@ enum Command {
         port: Option<u16>,
         #[arg(long)]
         domain: Option<String>,
+        #[arg(long = "path-prefix")]
+        path_prefix: Option<String>,
         #[arg(long, value_enum, default_value = "on-failure")]
         restart: RestartArg,
     },
@@ -51,6 +53,10 @@ enum Command {
     },
     /// Remove an app (stops it first) (FR20).
     Remove { app: String },
+    /// Reload app configs from disk (FR14). Usually unnecessary — the
+    /// daemon watches `apps_dir` and picks up changes automatically — but
+    /// useful to confirm a change landed, or if the watch isn't running.
+    Apply,
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -100,6 +106,7 @@ async fn run() -> anyhow::Result<()> {
             command,
             port,
             domain,
+            path_prefix,
             restart,
         } => {
             let path = std::fs::canonicalize(&path)
@@ -113,6 +120,7 @@ async fn run() -> anyhow::Result<()> {
                 command,
                 port,
                 domain,
+                path_prefix,
                 env: Default::default(),
                 restart_policy: Some(restart.into()),
             };
@@ -161,6 +169,10 @@ async fn run() -> anyhow::Result<()> {
         Command::Remove { app } => {
             client.remove_app(&app).await?;
             println!("removed '{app}'");
+        }
+        Command::Apply => {
+            let result = client.apply().await?;
+            println!("reloaded {} app config(s)", result.apps_loaded);
         }
     }
     Ok(())

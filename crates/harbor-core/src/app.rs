@@ -98,6 +98,12 @@ pub struct AppConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub domain: Option<String>,
+    /// URL path prefix routed to this app, e.g. `/api` (FR8). Stripped
+    /// before the request is forwarded. Independent of `domain` — either,
+    /// both, or neither may be set; an app with neither is never reachable
+    /// through the reverse proxy.
+    #[serde(default)]
+    pub path_prefix: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
@@ -165,5 +171,6 @@ pub struct AppStatus {
     pub runtime: RuntimeKind,
     pub port: Option<u16>,
     pub domain: Option<String>,
+    pub path_prefix: Option<String>,
     pub last_exit_code: Option<i32>,
 }
