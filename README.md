@@ -4,7 +4,9 @@ Harbor is a cross-platform, language-agnostic application hosting platform:
 one daemon, one CLI, one config format for running Python/Node/.NET/Java/Rust
 apps with process supervision, instead of stitching together IIS+ARR+NSSM
 (Windows) or nginx+systemd (Linux/macOS) by hand. See
-[`docs/PRD.md`](docs/PRD.md) for full requirements and phased scope.
+[`docs/PRD.md`](docs/PRD.md) for full requirements and phased scope, or the
+docs site at **https://ashinberish.github.io/harbor/** (once GitHub Pages
+is enabled — see [`website/`](website)) for guides and reference.
 
 This repository currently implements the **Phase 1 scope**: a daemon + CLI
 process-supervision MVP. The reverse proxy, ACME/TLS, GUI, and native OS

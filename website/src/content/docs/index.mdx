@@ -1,0 +1,45 @@
+---
+title: Harbor
+description: A cross-platform, language-agnostic application hosting platform.
+template: splash
+hero:
+  tagline: One daemon, one CLI, one config format for hosting Python, Node.js, .NET, Java, and Rust apps — instead of hand-wiring IIS+ARR+NSSM or nginx+systemd per machine.
+  actions:
+    - text: Get Started
+      link: /harbor/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/ashinberish/harbor
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+	<Card title="Process supervision" icon="rocket">
+		Point Harbor at a project directory. It auto-detects the runtime, launches
+		it, captures logs, and restarts it per a configurable policy — start,
+		stop, restart, and status from one CLI.
+	</Card>
+	<Card title="Cross-platform" icon="laptop">
+		The same daemon, CLI, and TOML config format on Windows, macOS, and
+		Linux. No more OS-specific tooling per machine.
+	</Card>
+	<Card title="Declarative config" icon="document">
+		Every app is a plain, version-controllable TOML file. No hidden binary
+		state to lose track of.
+	</Card>
+	<Card title="Auto-recovery" icon="setting">
+		Apps come back after a daemon restart — and a live orphan left behind by
+		an unclean shutdown is detected and reaped before its replacement spawns.
+	</Card>
+</CardGrid>
+
+## Where this project is
+
+This site documents the **Phase 1** daemon + CLI process-supervision MVP.
+Reverse proxy, automatic SSL, native OS service install, and the GUI are
+later phases — see [Roadmap & Status](/harbor/roadmap/) for exactly what's
+implemented today versus what's planned.
