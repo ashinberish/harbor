@@ -1,0 +1,61 @@
+/*
+ * Formal, product-docs theme (Angular-docs inspired): a single restrained
+ * accent color instead of Starlight's default rainbow card cycling, Roboto
+ * for a crisp technical-writing tone, and slightly more generous content
+ * width to match a denser reference-doc layout.
+ */
+
+:root {
+	/* Angular-red accent, dark mode */
+	--sl-color-accent-low: hsl(350, 60%, 20%);
+	--sl-color-accent: hsl(350, 84%, 48%);
+	--sl-color-accent-high: hsl(350, 90%, 85%);
+
+	--sl-font: 'Roboto', var(--sl-font-system);
+	--sl-font-mono: 'Roboto Mono', var(--sl-font-system-mono);
+
+	--sl-content-width: 50rem;
+}
+
+:root[data-theme='light'] {
+	/* Angular-red accent, light mode */
+	--sl-color-accent-high: hsl(350, 75%, 32%);
+	--sl-color-accent: hsl(350, 84%, 44%);
+	--sl-color-accent-low: hsl(350, 90%, 95%);
+}
+
+/* Crisper, more formal headings than the default UI font stack. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+/* Replace Starlight's per-card rainbow border/background cycling with one
+   consistent, muted treatment — closer to a reference-docs card than a
+   marketing splash page. */
+.card {
+	--sl-card-border: var(--sl-color-hairline);
+	--sl-card-bg: transparent;
+	border-radius: 0.25rem;
+}
+
+.card .icon {
+	--sl-card-border: var(--sl-color-accent);
+	--sl-card-bg: var(--sl-color-accent-low);
+	border-radius: 0.25rem;
+}
+
+/* Slightly squarer, more formal buttons and inline code than the default
+   pill/rounded styling. */
+.sl-link-button {
+	border-radius: 0.25rem;
+}
+
+code {
+	border-radius: 0.2rem;
+}

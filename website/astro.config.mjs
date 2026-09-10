@@ -18,6 +18,24 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/ashinberish/harbor/edit/cl/lucid-babbage-3kdpkl/website/',
       },
+      customCss: ['./src/styles/custom.css'],
+      head: [
+        {
+          tag: 'link',
+          attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
+        },
+        {
+          tag: 'link',
+          attrs: { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: true },
+        },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'stylesheet',
+            href: 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap',
+          },
+        },
+      ],
       sidebar: [
         {
           label: 'Start Here',
